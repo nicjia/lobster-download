@@ -28,3 +28,4 @@ logs/
 cookies.txt
 what_was_moved.txt
 .wget-hsts
+*.7z
