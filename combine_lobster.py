@@ -24,9 +24,8 @@ def process_ticker(ticker):
 
     for z in zips:
         filename = os.path.basename(z)
-        # Skip empty zips (under 100 bytes) when calculating timeline
-        if os.path.getsize(z) < 100:
-            continue
+        # We NO LONGER skip empty zips when calculating timeline to ensure 
+        # the final filename reflects the entire requested range.
             
         # Assuming format like R3881_MMYT_2022-01-01_2022-01-31_0.zip
         match = re.search(rf'{ticker}_(\d{{4}}-\d{{2}}-\d{{2}})_(\d{{4}}-\d{{2}}-\d{{2}})_(\d+)\.zip', filename)
@@ -42,6 +41,16 @@ def process_ticker(ticker):
     start_date = min(start_dates)
     end_date = max(end_dates)
     level = next(iter(levels)) if levels else "0"
+    
+    final_archive = f"{ticker}_{start_date}_{end_date}_{level}.7z"
+    if os.path.exists(final_archive):
+        print(f"[{ticker}] '{final_archive}' already exists! Skipping combination process.")
+        old_archives = glob.glob(f"{ticker}_*_*_*.7z")
+        for old_arch in old_archives:
+            if old_arch != final_archive:
+                print(f"[{ticker}] Deleting older obsolete archive: {old_arch}")
+                os.remove(old_arch)
+        return
 
     print(f"[{ticker}] Detected timeline: {start_date} to {end_date} (Level {level})")
 
@@ -55,34 +64,38 @@ def process_ticker(ticker):
         
     os.makedirs(extract_dir, exist_ok=True)
 
-    print(f"[{ticker}] Found {len(zips)} zip files. Unzipping monthly files using multiple cores...")
+    print(f"[{ticker}] Found {len(zips)} zip files. Unzipping monthly files...")
     def extract_zip(z):
+        # Isolate extraction to avoid race conditions
+        base_name = os.path.basename(z).replace('.zip', '')
+        unique_dir = os.path.join(temp_dir, "zips", base_name)
+        os.makedirs(unique_dir, exist_ok=True)
         try:
-            # -n instead of -o to not overwrite, and capture output
-            subprocess.run(["unzip", "-q", "-o", z, "-d", temp_dir], check=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+            subprocess.run(["unzip", "-q", "-o", z, "-d", unique_dir], check=True, stderr=subprocess.PIPE, stdout=subprocess.PIPE)
         except subprocess.CalledProcessError as e:
-            # Check if empty zip (unzip exits with 1 for empty or warning)
             if b"zipfile is empty" in e.stderr or b"Empty" in e.stdout or os.path.getsize(z) < 100:
                 print(f"[{ticker}] Skipping empty or invalid zip file: {os.path.basename(z)}")
             else:
                 print(f"[{ticker}] Error extracting {os.path.basename(z)}: {e.stderr.decode('utf-8')}")
-                # Don't fail the whole process if one zip is bad
 
-    with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
+    # Limit workers to prevent I/O bottleneck and threading errors
+    workers = min(4, os.cpu_count() or 1)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
         list(executor.map(extract_zip, zips))
 
-    daily_7z = glob.glob(os.path.join(temp_dir, "*.7z"))
-    print(f"[{ticker}] Found {len(daily_7z)} daily .7z files. Extracting CSVs using multiple cores...")
+    daily_7z = []
+    for root, _, files in os.walk(os.path.join(temp_dir, "zips")):
+        for file in files:
+            if file.endswith('.7z'):
+                daily_7z.append(os.path.join(root, file))
+
+    print(f"[{ticker}] Found {len(daily_7z)} daily .7z files. Extracting CSVs...")
     
-    # Suppress output of 7z to avoid console spam
     def extract_7z(d7z):
         subprocess.run(["7z", "e", d7z, f"-o{extract_dir}", "-y"], check=True, stdout=subprocess.DEVNULL)
-    with ThreadPoolExecutor(max_workers=os.cpu_count()) as executor:
-        list(executor.map(extract_7z, daily_7z))
         
-    final_archive = f"{ticker}_{start_date}_{end_date}_{level}.7z"
-    if os.path.exists(final_archive):
-        os.remove(final_archive)
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        list(executor.map(extract_7z, daily_7z))
         
     print(f"[{ticker}] Compressing all CSVs into {final_archive} (Fast Multi-Core mode)...")
     
@@ -91,6 +104,13 @@ def process_ticker(ticker):
     compress_cmd = ["7z", "a", "-t7z", "-mx=3", "-mmt=on", final_archive, f"{extract_dir}/*"]
     subprocess.run(compress_cmd, check=True, stdout=subprocess.DEVNULL)
     
+    # Remove older incomplete .7z archives for this ticker if they exist
+    old_archives = glob.glob(f"{ticker}_*_*_*.7z")
+    for old_arch in old_archives:
+        if old_arch != final_archive:
+            print(f"[{ticker}] Deleting older obsolete archive: {old_arch}")
+            os.remove(old_arch)
+
     print(f"[{ticker}] Cleaning up temporary files...")
     shutil.rmtree(temp_dir)
     print(f"🎉 Done! Created {final_archive}")
@@ -98,9 +118,14 @@ def process_ticker(ticker):
 
 if __name__ == "__main__":
     if len(sys.argv) < 2:
-        print("Usage: python combine_lobster.py <TICKER>")
-        print("Example: python combine_lobster.py MMYT")
-        sys.exit(1)
-    
-    ticker = sys.argv[1].upper()
-    process_ticker(ticker)
+        print("No ticker specified. Scanning for all tickers in ./lobster_data...")
+        if not os.path.exists("./lobster_data"):
+            print("No lobster_data directory found.")
+            sys.exit(1)
+        
+        tickers = [d for d in os.listdir("./lobster_data") if os.path.isdir(os.path.join(".", "lobster_data", d))]
+        for t in tickers:
+            process_ticker(t)
+    else:
+        ticker = sys.argv[1].upper()
+        process_ticker(ticker)

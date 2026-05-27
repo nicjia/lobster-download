@@ -29,3 +29,7 @@ cookies.txt
 what_was_moved.txt
 .wget-hsts
 *.7z
+
+.gemini/
+.antigravity-server/
+lobsterdataapi.md

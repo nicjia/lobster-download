@@ -40,6 +40,15 @@ check with tmux attach -t lobster_dl
 downloads chunks of 30 days into .zip files for each stock in /lobster_data
 each chunk has a .7z file for every single day
 
-- need to add a script to undo it into the normal format
+turn into .7z
+```bash
+python3 combine_lobster.py STOCK_TICKER
+```
+or 
+```bash
+python3 combine_lobster.py
+```
+to process all stocks in the directory that don't have .7z files yet
+
 
 
