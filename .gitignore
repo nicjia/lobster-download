@@ -1,0 +1,30 @@
+# System/shell files
+.bash_history
+.bash_logout
+.bashrc
+.profile
+.gitconfig
+
+# IDE & tools
+.vscode-server/
+.copilot/
+
+# User directories
+.cache/
+.config/
+.local/
+.ssh/
+
+# Python/venv
+.venv/
+.env
+__pycache__/
+
+# Downloaded data & logs
+lobster_data/
+logs/
+*.csv
+*.txt
+cookies.txt
+what_was_moved.txt
+.wget-hsts
