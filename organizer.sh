@@ -28,22 +28,23 @@ for zip_file in "$SOURCE_DIR"/*.zip; do
 
         filename=$(basename "$archive")
 
-        # Parse the filename using regex: <TICKER>_<YYYY>_<MM>_<DD>.7z
-        if [[ "$filename" =~ ^([A-Za-z0-9]+)_([0-9]{4})_([0-9]{2})_([0-9]{2})\.7z$ ]]; then
+        # Parse the filename using regex: <TICKER>_<YYYY>-<MM>-<DD>.7z
+        if [[ "$filename" =~ ^([A-Za-z0-9]+)_([0-9]{4})-([0-9]{2})-([0-9]{2})\.7z$ ]]; then
             ticker="${BASH_REMATCH[1]}"
             yyyy="${BASH_REMATCH[2]}"
             mm="${BASH_REMATCH[3]}"
             dd="${BASH_REMATCH[4]}"
 
             # Construct target paths
-            target_dir="$TARGET_BASE/$yyyy/${yyyy}_${mm}_${dd}"
+            target_dir="$TARGET_BASE/$yyyy/${yyyy}${mm}${dd}"
             target_path="$target_dir/${ticker}.7z"
 
             # Create the nested directory structure if it doesn't exist
-            mkdir -p "$target_dir"
+            # Uses sg to ensure it's created with the lobster group
+            sg lobster -c "mkdir -p '$target_dir'"
 
             # Move the .7z file to its final destination
-            mv "$archive" "$target_path"
+            sg lobster -c "mv '$archive' '$target_path'"
             echo "   ✅ Moved: $ticker to $target_dir/"
         else
             echo "   ⚠️ Skipped: $filename (Filename did not match expected pattern)"
