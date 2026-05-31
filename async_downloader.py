@@ -58,17 +58,18 @@ def get_pending_tickers():
 
 def remove_ticker_from_csv(symbol):
     try:
-        with open(PENDING_FILE, "r+") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            f.seek(0)
+        temp_file = PENDING_FILE + f".tmp.{os.getpid()}.{time.time()}"
+        with open(PENDING_FILE, "r") as f:
             lines = f.readlines()
-            f.seek(0)
-            f.truncate()
+            
+        with open(temp_file, "w") as f:
             for line in lines:
                 if not line.strip(): continue
                 if line.strip().split(',')[0].strip().upper() != symbol:
                     f.write(line)
-            fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+        
+        # os.replace is atomic on POSIX
+        os.replace(temp_file, PENDING_FILE)
         
         shared_locks_dir = os.path.join(tempfile.gettempdir(), "lobster_locks")
         lock_path = os.path.join(shared_locks_dir, symbol)
@@ -319,6 +320,17 @@ def poll_and_download_worker(client, pending_counts):
                 print("🛑 Poller/Downloader Thread finishing for this batch.")
                 break
         try:
+            # Touch lock timestamps to keep them alive
+            with count_lock:
+                for sym in list(pending_counts.keys()):
+                    lock_path = os.path.join(tempfile.gettempdir(), "lobster_locks", sym, "timestamp")
+                    try:
+                        if os.path.exists(lock_path):
+                            with open(lock_path, "w") as tf:
+                                tf.write(str(time.time()))
+                    except Exception:
+                        pass
+
             # Fetch all requests to manually find downloadable AND empty ones
             all_reqs = client.list_requests()
             ready = []
