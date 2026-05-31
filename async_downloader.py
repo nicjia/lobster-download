@@ -42,12 +42,16 @@ def get_pending_tickers():
     tickers = []
     try:
         with open(PENDING_FILE, "r") as f:
-            reader = csv.reader(f)
-            for row in reader:
-                if not row: continue
-                t = row[0].strip().upper()
-                if t and t != "TICKER":
-                    tickers.append(t)
+            fcntl.flock(f.fileno(), fcntl.LOCK_SH)
+            try:
+                reader = csv.reader(f)
+                for row in reader:
+                    if not row: continue
+                    t = row[0].strip().upper()
+                    if t and t != "TICKER":
+                        tickers.append(t)
+            finally:
+                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
     except FileNotFoundError:
         pass
     return list(dict.fromkeys(tickers)) # remove duplicates
@@ -174,6 +178,8 @@ def combine_and_remove(sym):
         print(f"❌ Error finalizing {sym}: {e}")
 
 def generate_jobs(client):
+    global DOWNLOADED_SET
+    DOWNLOADED_SET = get_downloaded_from_log()
     jobs = []
     pending_counts = {}
     
@@ -308,6 +314,10 @@ def submit_worker(jobs, client):
 def poll_and_download_worker(client, pending_counts):
     print("🚀 Poller/Downloader Thread starting.")
     while True:
+        with count_lock:
+            if not pending_counts or sum(pending_counts.values()) == 0:
+                print("🛑 Poller/Downloader Thread finishing for this batch.")
+                break
         try:
             # Fetch all requests to manually find downloadable AND empty ones
             all_reqs = client.list_requests()
@@ -428,13 +438,34 @@ if __name__ == "__main__":
         print("✅ Submissions complete. Waiting for final downloads in this batch...")
         
         while True:
-            try:
-                with count_lock:
-                    active = len(pending_counts)
+            with count_lock:
+                active = sum(pending_counts.values())
                 if active == 0:
-                    print("✅ Batch complete. Starting next batch...")
                     break
-                print(f"⏳ Waiting for {active} tickers to finish downloading/combining...")
-                time.sleep(30)
+            
+            try:
+                current_reqs = client.list_requests()
+                active_symbols_on_server = set(r["symbol"] for r in current_reqs if r.get("status") not in ("error", "failed", "deleted"))
+                
+                with count_lock:
+                    stuck = []
+                    for sym in list(pending_counts.keys()):
+                        if sym not in active_symbols_on_server:
+                            stuck.append(sym)
+                    
+                    for sym in stuck:
+                        print(f"⚠️ {sym} is stuck (no active requests on server). Releasing lock to retry later.")
+                        del pending_counts[sym]
+                        lock_path = os.path.join(tempfile.gettempdir(), "lobster_locks", sym)
+                        if os.path.exists(lock_path):
+                            shutil.rmtree(lock_path, ignore_errors=True)
             except Exception as e:
-                time.sleep(30)
+                pass
+
+            with count_lock:
+                active = sum(pending_counts.values())
+                if active == 0:
+                    break
+                print(f"⏳ Waiting for {len(pending_counts)} tickers to finish downloading/combining...")
+                
+            time.sleep(30)
